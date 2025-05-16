@@ -74,22 +74,31 @@ app.post('/upload', upload.single('file'), async (req, res) => {
 });
 
 // ✅ Route تحميل آمن للملفات
-app.get('/download', async (req, res) => {
+app.get('/check', async (req, res) => {
   try {
     const fileName = req.query.file;
-    if (!fileName) return res.status(400).send('⚠️ اسم الملف مفقود.');
+    if (!fileName) return res.status(400).send('No file specified');
 
     const auth = await authorizeB2();
     const fileUrl = `${auth.downloadUrl}/file/${B2_BUCKET_NAME}/${encodeURIComponent(fileName)}`;
 
-    const fileRes = await axios.get(fileUrl, { responseType: 'stream' });
+    const headRes = await axios.head(fileUrl, {
+      headers: { Authorization: auth.authorizationToken }
+    });
 
-    res.setHeader('Content-Disposition', `attachment; filename="${path.basename(fileName)}"`);
+    if (headRes.status === 200) {
+      res.status(200).send('File exists');
+    } else {
+      res.status(404).send('File not found');
+    }
 
-    fileRes.data.pipe(res);
   } catch (err) {
-    console.error('❌ Error downloading file:', err.message);
-    res.status(500).send('❌ حصل خطأ أثناء تحميل الملف.');
+    if (err.response && err.response.status === 404) {
+      res.status(404).send('File not found');
+    } else {
+      console.error('Error in /check:', err.message);
+      res.status(500).send('Error checking file');
+    }
   }
 });
 
