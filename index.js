@@ -1,12 +1,13 @@
 const express = require('express');
 const multer = require('multer');
-const cors = require('cors'); // 👈 جديد
+const cors = require('cors');
 const axios = require('axios');
 const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
-app.use(cors()); // 👈 جديد
+app.use(cors());
 const upload = multer({ dest: 'uploads/' });
 
 const {
@@ -30,6 +31,7 @@ async function authorizeB2() {
   return cachedAuth;
 }
 
+// ✅ Route رفع الملفات
 app.post('/upload', upload.single('file'), async (req, res) => {
   try {
     const file = req.file;
@@ -46,7 +48,7 @@ app.post('/upload', upload.single('file'), async (req, res) => {
 
     const fileBuffer = fs.readFileSync(file.path);
 
-    const b2Upload = await axios.post(
+    await axios.post(
       uploadUrl,
       fileBuffer,
       {
@@ -59,7 +61,7 @@ app.post('/upload', upload.single('file'), async (req, res) => {
       }
     );
 
-    fs.unlinkSync(file.path); // Delete temp file
+    fs.unlinkSync(file.path); // حذف الملف المؤقت
 
     const fileUrl = `${auth.downloadUrl}/file/${B2_BUCKET_NAME}/${encodeURIComponent(file.originalname)}`;
 
@@ -71,9 +73,26 @@ app.post('/upload', upload.single('file'), async (req, res) => {
   }
 });
 
+// ✅ Route تحميل آمن للملفات
+app.get('/download', async (req, res) => {
+  try {
+    const fileName = req.query.file;
+    if (!fileName) return res.status(400).send('⚠️ اسم الملف مفقود.');
 
+    const auth = await authorizeB2();
+    const fileUrl = `${auth.downloadUrl}/file/${B2_BUCKET_NAME}/${encodeURIComponent(fileName)}`;
+
+    const fileRes = await axios.get(fileUrl, { responseType: 'stream' });
+
+    res.setHeader('Content-Disposition', `attachment; filename="${path.basename(fileName)}"`);
+
+    fileRes.data.pipe(res);
+  } catch (err) {
+    console.error('❌ Error downloading file:', err.message);
+    res.status(500).send('❌ حصل خطأ أثناء تحميل الملف.');
+  }
+});
 
 app.listen(3000, () => {
   console.log('✅ Server running on http://localhost:3000');
 });
-
