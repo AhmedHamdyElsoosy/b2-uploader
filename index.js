@@ -8,6 +8,7 @@ require('dotenv').config();
 
 const app = express();
 app.use(cors());
+app.use(express.json());
 const upload = multer({ dest: 'uploads/' });
 
 const {
@@ -48,23 +49,18 @@ app.post('/upload', upload.single('file'), async (req, res) => {
 
     const fileBuffer = fs.readFileSync(file.path);
 
-    await axios.post(
-      uploadUrl,
-      fileBuffer,
-      {
-        headers: {
-          Authorization: uploadAuthToken,
-          'X-Bz-File-Name': encodeURIComponent(file.originalname),
-          'Content-Type': 'b2/x-auto',
-          'X-Bz-Content-Sha1': 'do_not_verify'
-        }
+    await axios.post(uploadUrl, fileBuffer, {
+      headers: {
+        Authorization: uploadAuthToken,
+        'X-Bz-File-Name': encodeURIComponent(file.originalname),
+        'Content-Type': 'b2/x-auto',
+        'X-Bz-Content-Sha1': 'do_not_verify'
       }
-    );
+    });
 
     fs.unlinkSync(file.path); // حذف الملف المؤقت
 
     const fileUrl = `${auth.downloadUrl}/file/${B2_BUCKET_NAME}/${encodeURIComponent(file.originalname)}`;
-
     res.json({ success: true, url: fileUrl });
 
   } catch (err) {
@@ -85,11 +81,81 @@ app.get('/download', async (req, res) => {
     const fileRes = await axios.get(fileUrl, { responseType: 'stream' });
 
     res.setHeader('Content-Disposition', `attachment; filename="${path.basename(fileName)}"`);
-
     fileRes.data.pipe(res);
   } catch (err) {
     console.error('❌ Error downloading file:', err.message);
     res.status(500).send('❌ حصل خطأ أثناء تحميل الملف.');
+  }
+});
+
+// ✅ Route نسخ الملف باسم جديد ثم حذف النسخة الأصلية
+app.post('/copy-contract', async (req, res) => {
+  try {
+    const { oldName, newName } = req.body;
+    if (!oldName || !newName) return res.status(400).send('❌ oldName و newName مطلوبين');
+
+    const auth = await authorizeB2();
+
+    // تحميل الملف القديم
+    const oldFileUrl = `${auth.downloadUrl}/file/${B2_BUCKET_NAME}/${encodeURIComponent(oldName)}`;
+    const fileRes = await axios.get(oldFileUrl, { responseType: 'arraybuffer' });
+
+    // رفع باسم جديد
+    const uploadUrlRes = await axios.post(
+      `${auth.apiUrl}/b2api/v2/b2_get_upload_url`,
+      { bucketId: B2_BUCKET_ID },
+      { headers: { Authorization: auth.authorizationToken } }
+    );
+
+    const uploadUrl = uploadUrlRes.data.uploadUrl;
+    const uploadAuthToken = uploadUrlRes.data.authorizationToken;
+
+    await axios.post(uploadUrl, fileRes.data, {
+      headers: {
+        Authorization: uploadAuthToken,
+        'X-Bz-File-Name': encodeURIComponent(newName),
+        'Content-Type': 'b2/x-auto',
+        'X-Bz-Content-Sha1': 'do_not_verify'
+      }
+    });
+
+    // الحصول على fileId وحذف النسخة القديمة
+    const listRes = await axios.post(
+      `${auth.apiUrl}/b2api/v2/b2_list_file_names`,
+      {
+        bucketId: B2_BUCKET_ID,
+        prefix: oldName,
+        maxFileCount: 1
+      },
+      {
+        headers: { Authorization: auth.authorizationToken }
+      }
+    );
+
+    const files = listRes.data.files;
+    if (files.length > 0) {
+      const fileId = files[0].fileId;
+
+      await axios.post(
+        `${auth.apiUrl}/b2api/v2/b2_delete_file_version`,
+        {
+          fileName: oldName,
+          fileId: fileId
+        },
+        {
+          headers: { Authorization: auth.authorizationToken }
+        }
+      );
+
+      console.log(`🗑️ Deleted old file: ${oldName}`);
+    } else {
+      console.warn(`⚠️ Could not find old file: ${oldName}`);
+    }
+
+    res.status(200).send('✅ File copied with new name and old one deleted');
+  } catch (err) {
+    console.error('❌ Error in /copy-contract:', err.response?.data || err.message);
+    res.status(500).send('❌ Error copying and deleting file');
   }
 });
 
