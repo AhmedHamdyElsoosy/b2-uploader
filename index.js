@@ -92,15 +92,15 @@ app.get('/download', async (req, res) => {
 app.post('/copy-contract', async (req, res) => {
   try {
     const { oldName, newName } = req.body;
-    if (!oldName || !newName) return res.status(400).send('❌ oldName و newName مطلوبين');
+    if (!oldName || !newName) return res.status(400).json({ success: false, message: '❌ oldName و newName مطلوبين' });
 
     const auth = await authorizeB2();
 
-    // تحميل الملف القديم
+    // 1. تحميل الملف القديم
     const oldFileUrl = `${auth.downloadUrl}/file/${B2_BUCKET_NAME}/${encodeURIComponent(oldName)}`;
     const fileRes = await axios.get(oldFileUrl, { responseType: 'arraybuffer' });
 
-    // رفع باسم جديد
+    // 2. رفع باسم جديد
     const uploadUrlRes = await axios.post(
       `${auth.apiUrl}/b2api/v2/b2_get_upload_url`,
       { bucketId: B2_BUCKET_ID },
@@ -119,7 +119,7 @@ app.post('/copy-contract', async (req, res) => {
       }
     });
 
-    // الحصول على fileId وحذف النسخة القديمة
+    // 3. الحصول على fileId للنسخة القديمة
     const listRes = await axios.post(
       `${auth.apiUrl}/b2api/v2/b2_list_file_names`,
       {
@@ -136,6 +136,7 @@ app.post('/copy-contract', async (req, res) => {
     if (files.length > 0) {
       const fileId = files[0].fileId;
 
+      // 4. حذف النسخة الأصلية
       await axios.post(
         `${auth.apiUrl}/b2api/v2/b2_delete_file_version`,
         {
@@ -147,15 +148,24 @@ app.post('/copy-contract', async (req, res) => {
         }
       );
 
-      console.log(`🗑️ Deleted old file: ${oldName}`);
+      return res.status(200).json({
+        success: true,
+        message: `✅ File copied as "${newName}" and deleted "${oldName}"`
+      });
     } else {
-      console.warn(`⚠️ Could not find old file: ${oldName}`);
+      return res.status(404).json({
+        success: false,
+        message: `⚠️ Could not find old file "${oldName}" to delete`
+      });
     }
 
-    res.status(200).send('✅ File copied with new name and old one deleted');
   } catch (err) {
     console.error('❌ Error in /copy-contract:', err.response?.data || err.message);
-    res.status(500).send('❌ Error copying and deleting file');
+    return res.status(500).json({
+      success: false,
+      message: '❌ Error copying and deleting file',
+      error: err.message
+    });
   }
 });
 
